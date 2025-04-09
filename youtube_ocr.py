@@ -18,7 +18,7 @@ print("CUDA is available, using GPU acceleration for OCR." if use_cuda else "CUD
 r = redis.Redis(host='localhost', port=6379, db=0)
 
 # GUI check
-DISPLAY_GUI = True
+DISPLAY_GUI = False
 if platform.system().lower() in ["linux", "darwin"]:
     DISPLAY_GUI = False
 
