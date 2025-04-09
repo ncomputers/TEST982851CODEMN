@@ -1,7 +1,6 @@
 import time
 import logging
 import threading
-import winsound
 from exchange import DeltaExchangeClient
 import config
 import binance_ws  # Live price updates via WS
@@ -24,15 +23,7 @@ class ProfitTrailing:
         self.beep_thread = None
         self.beeping = False
 
-    def start_beep_loop(self):
-        def beep_loop():
-            while self.beeping:
-                winsound.Beep(1000, 1000)
-                time.sleep(1)
-        if not self.beeping:
-            self.beeping = True
-            self.beep_thread = threading.Thread(target=beep_loop, daemon=True)
-            self.beep_thread.start()
+   
 
     def stop_beep_loop(self):
         self.beeping = False
@@ -40,7 +31,7 @@ class ProfitTrailing:
     def fetch_open_positions(self):
         try:
             positions = self.client.fetch_positions()
-            self.stop_beep_loop()
+           
             open_positions = []
             for pos in positions:
                 size = pos.get('size') or pos.get('contracts') or 0
