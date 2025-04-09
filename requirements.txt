@@ -4,3 +4,10 @@ python-dotenv
 websocket-client
 pycryptodome
 requests
+opencv-python
+yt-dlp
+easyocr
+numpy
+redis
+
+
