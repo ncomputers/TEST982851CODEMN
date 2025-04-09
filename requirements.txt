@@ -4,10 +4,15 @@ python-dotenv
 websocket-client
 pycryptodome
 requests
-opencv-python
 yt-dlp
 easyocr
 numpy
 redis
+opencv-python-headless
+numpy
+yt-dlp
+easyocr
+firebase-admin
+Pillow
 
 
