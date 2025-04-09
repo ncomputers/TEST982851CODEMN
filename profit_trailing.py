@@ -20,13 +20,11 @@ class ProfitTrailing:
         self.position_fetch_interval = 5
         self.cached_positions = []
         self.last_error_email_sent = 0
-        self.beep_thread = None
-        self.beeping = False
-
+        
+        
    
 
-    def stop_beep_loop(self):
-        self.beeping = False
+  
 
     def fetch_open_positions(self):
         try:
@@ -48,7 +46,7 @@ class ProfitTrailing:
             logger.error("Error fetching open positions: %s", e)
             if "ip_not_whitelisted" in str(e):
                 current_time = time.time()
-                self.start_beep_loop()
+                
                 if current_time - self.last_error_email_sent > 3600:
                     send_email(
                         subject="❌ IP Not Whitelisted for API Key",
