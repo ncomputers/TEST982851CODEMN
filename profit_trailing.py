@@ -102,21 +102,31 @@ class ProfitTrailing:
         conf = config.PROFIT_TRAILING_CONFIG
         fixed_sl = conf["fixed_stop_loss_pct"]
 
-        if profit_pct <= 0 or profit_pct < conf["start_trailing_profit_pct"]:
-            rule = "fixed_stop"
-            new_trailing = entry * (1 - fixed_sl) if size > 0 else entry * (1 + fixed_sl)
-        else:
+        # Preserve existing rule if it was already dynamic or partial_booking
+        existing_display = self.last_display.get(order_id)
+        existing_rule = existing_display["rule"] if existing_display else "fixed_stop"
+
+        rule = "fixed_stop"  # default
+        level_conf = None
+        if profit_pct >= conf["start_trailing_profit_pct"]:
             level_conf = self.get_trailing_config(profit_pct)
-            if level_conf is None:
-                rule = "fixed_stop"
-                new_trailing = entry * (1 - fixed_sl) if size > 0 else entry * (1 + fixed_sl)
-            elif level_conf["trailing_stop_offset"] is not None:
+            if existing_rule in ["dynamic", "partial_booking"]:
+                rule = existing_rule
+            elif level_conf and level_conf.get("trailing_stop_offset") is not None:
                 rule = "dynamic"
-                new_trailing = entry * (1 + level_conf["trailing_stop_offset"]) if size > 0 else entry * (1 - level_conf["trailing_stop_offset"])
-            else:
+            elif level_conf:
                 rule = "partial_booking"
-                book_fraction = level_conf.get("book_fraction", 1.0)
-                new_trailing = entry * (1 + profit_pct * book_fraction) if size > 0 else entry * (1 - profit_pct * book_fraction)
+
+        if rule == "fixed_stop":
+            new_trailing = entry * (1 - fixed_sl) if size > 0 else entry * (1 + fixed_sl)
+        elif rule == "dynamic" and level_conf:
+            new_trailing = entry * (1 + level_conf["trailing_stop_offset"]) if size > 0 else entry * (1 - level_conf["trailing_stop_offset"])
+        elif rule == "partial_booking" and level_conf:
+            book_fraction = level_conf.get("book_fraction", 1.0)
+            new_trailing = entry * (1 + profit_pct * book_fraction) if size > 0 else entry * (1 - profit_pct * book_fraction)
+        else:
+            # fallback in case level_conf was None
+            new_trailing = entry * (1 - fixed_sl) if size > 0 else entry * (1 + fixed_sl)
 
         stored_trailing = self.position_trailing_stop.get(order_id)
         if stored_trailing is not None:
