@@ -20,16 +20,11 @@ class ProfitTrailing:
         self.position_fetch_interval = 5
         self.cached_positions = []
         self.last_error_email_sent = 0
-        
-        
-   
-
-  
+        self.last_display = {}
 
     def fetch_open_positions(self):
         try:
             positions = self.client.fetch_positions()
-           
             open_positions = []
             for pos in positions:
                 size = pos.get('size') or pos.get('contracts') or 0
@@ -46,10 +41,9 @@ class ProfitTrailing:
             logger.error("Error fetching open positions: %s", e)
             if "ip_not_whitelisted" in str(e):
                 current_time = time.time()
-                
                 if current_time - self.last_error_email_sent > 3600:
                     send_email(
-                        subject="❌ IP Not Whitelisted for API Key",
+                        subject="IP Not Whitelisted for API Key",
                         body=f"The IP {e} is not authorized to access the API.",
                         to_email="rapidcorp.in@gmail.com"
                     )
@@ -57,7 +51,7 @@ class ProfitTrailing:
             else:
                 if time.time() - self.last_error_email_sent > 3600:
                     send_email(
-                        subject="⚠️ ProfitTrailing Error",
+                        subject="ProfitTrailing Error",
                         body=f"Unhandled error while fetching positions:\n{str(e)}",
                         to_email="rapidcorp.in@gmail.com"
                     )
@@ -153,22 +147,17 @@ class ProfitTrailing:
             size = 0.0
 
         trailing_stop, profit_pct, rule = self.update_trailing_stop(pos, live_price)
-        logger.info("Order %s | Profit%%: %.2f%% | Rule: %s | Trailing Stop: %.4f | Live: %.2f",
-                    order_id, profit_pct * 100 if profit_pct is not None else 0, rule, trailing_stop if trailing_stop else 0, live_price)
 
         if rule == "dynamic":
             if size > 0 and live_price < trailing_stop:
-                logger.info("Trailing stop triggered for long order %s. Booking full profit.", order_id)
                 close_order = self.trade_manager.place_market_order("BTCUSD", "sell", size, params={"time_in_force": "ioc"})
-                logger.info("Market order to close long position placed: %s", close_order)
+                logger.info("Trailing stop triggered for long order %s. Booking full profit. Close order: %s", order_id, close_order)
                 return True
             elif size < 0 and live_price > trailing_stop:
-                logger.info("Trailing stop triggered for short order %s. Booking full profit.", order_id)
                 close_order = self.trade_manager.place_market_order("BTCUSD", "buy", abs(size), params={"time_in_force": "ioc"})
-                logger.info("Market order to close short position placed: %s", close_order)
+                logger.info("Trailing stop triggered for short order %s. Booking full profit. Close order: %s", order_id, close_order)
                 return True
         elif rule == "partial_booking":
-            logger.info("Partial booking mode for order %s. Updating bracket order to new trailing stop %.4f.", order_id, trailing_stop)
             try:
                 bracket_params = {
                     "bracket_stop_loss_limit_price": str(trailing_stop),
@@ -187,14 +176,12 @@ class ProfitTrailing:
             return False
         elif rule == "fixed_stop":
             if size > 0 and live_price < trailing_stop:
-                logger.info("Fixed stop triggered for long order %s. Booking profit.", order_id)
                 close_order = self.trade_manager.place_market_order("BTCUSD", "sell", size, params={"time_in_force": "ioc"})
-                logger.info("Market order to close long position placed: %s", close_order)
+                logger.info("Fixed stop triggered for long order %s. Booking profit. Close order: %s", order_id, close_order)
                 return True
             elif size < 0 and live_price > trailing_stop:
-                logger.info("Fixed stop triggered for short order %s. Booking profit.", order_id)
                 close_order = self.trade_manager.place_market_order("BTCUSD", "buy", abs(size), params={"time_in_force": "ioc"})
-                logger.info("Market order to close short position placed: %s", close_order)
+                logger.info("Fixed stop triggered for short order %s. Booking profit. Close order: %s", order_id, close_order)
                 return True
         return False
 
@@ -202,14 +189,13 @@ class ProfitTrailing:
         binance_ws.run_in_thread()
         wait_time = 0
         while binance_ws.current_price is None and wait_time < 30:
-            print("Waiting for live price update...")
+            logger.info("Waiting for live price update...")
             time.sleep(2)
             wait_time += 2
         if binance_ws.current_price is None:
-            print("Live price still not available. Exiting Profit Trailing Tracker.")
+            logger.warning("Live price still not available. Exiting Profit Trailing Tracker.")
             return
 
-        last_verification = time.time()
         while True:
             current_time = time.time()
             if current_time - self.last_position_fetch_time >= self.position_fetch_interval:
@@ -220,47 +206,62 @@ class ProfitTrailing:
 
             live_price = binance_ws.current_price
             if live_price is None:
-                print("Live price not available.")
+                continue
+
+            open_positions = self.cached_positions
+            has_positions = bool(open_positions)
+            if not has_positions:
+                if self.last_had_positions:
+                    logger.info("No open positions. Profit trailing paused.")
+                    self.last_had_positions = False
+                self.position_trailing_stop.clear()
             else:
-                open_positions = self.cached_positions
-                has_positions = bool(open_positions)
-                if not has_positions:
-                    if self.last_had_positions:
-                        print("No open positions. Profit trailing paused.")
-                        self.last_had_positions = False
-                    self.position_trailing_stop.clear()
-                else:
-                    if not self.last_had_positions:
-                        print("Positions found. Profit trailing resumed.")
-                        self.last_had_positions = True
+                if not self.last_had_positions:
+                    logger.info("Positions found. Profit trailing resumed.")
+                    self.last_had_positions = True
 
-                    for pos in open_positions:
-                        order_id = pos.get('id')
-                        size = pos.get('size') or pos.get('contracts') or 0
-                        try:
-                            size = float(size)
-                        except Exception:
-                            size = 0.0
-                        if size == 0:
-                            continue
-                        entry = pos.get('entryPrice') or pos.get('entry_price') or pos.get('info', {}).get('entry_price')
-                        try:
-                            entry_val = float(entry)
-                        except Exception:
-                            entry_val = None
-                        profit_pct = self.compute_profit_pct(pos, live_price)
-                        profit_display = profit_pct * 100 if profit_pct is not None else None
-                        raw_profit = self.compute_raw_profit(pos, live_price)
-                        profit_usd = raw_profit / 1000 if raw_profit is not None else None
-                        profit_inr = profit_usd * 85 if profit_usd is not None else None
+                for pos in open_positions:
+                    order_id = pos.get('id')
+                    size = pos.get('size') or pos.get('contracts') or 0
+                    try:
+                        size = float(size)
+                    except Exception:
+                        size = 0.0
+                    if size == 0:
+                        continue
+                    entry = pos.get('entryPrice') or pos.get('entry_price') or pos.get('info', {}).get('entry_price')
+                    try:
+                        entry_val = float(entry)
+                    except Exception:
+                        entry_val = None
+                    profit_pct = self.compute_profit_pct(pos, live_price)
+                    profit_display = profit_pct * 100 if profit_pct is not None else None
+                    raw_profit = self.compute_raw_profit(pos, live_price)
+                    profit_usd = raw_profit / 1000 if raw_profit is not None else None
+                    profit_inr = profit_usd * 85 if profit_usd is not None else None
 
-                        trailing_stop, max_profit_pct, rule = self.update_trailing_stop(pos, live_price)
-                        print(f"Order: {order_id} | Size: {size} | Entry: {entry_val} | Live: {live_price} | "
-                              f"Profit%%: {profit_display:.4f}% | Profit (USD): {profit_usd:.4f} | "
-                              f"Profit (INR): {profit_inr:.4f} | Rule: {rule} | Trailing Stop: {trailing_stop}")
+                    trailing_stop, max_profit_pct, rule = self.update_trailing_stop(pos, live_price)
 
-                        if self.book_profit(pos, live_price):
-                            print(f"Profit booked for order {order_id}.")
+                    display = {
+                        "entry": entry_val,
+                        "live": live_price,
+                        "profit": round(profit_display or 0, 2),
+                        "usd": round(profit_usd or 0, 2),
+                        "inr": round(profit_inr or 0, 2),
+                        "rule": rule,
+                        "sl": round(trailing_stop or 0, 2)
+                    }
+
+                    if self.last_display.get(order_id) != display:
+                        logger.info(
+                            f"Order: {order_id} | Entry: {entry_val:.1f} | Live: {live_price:.1f} | "
+                            f"PnL: {profit_display:.2f}%% | USD: {profit_usd:.2f} | INR: {profit_inr:.2f} | "
+                            f"Rule: {rule} | SL: {trailing_stop:.1f}"
+                        )
+                        self.last_display[order_id] = display
+
+                    if self.book_profit(pos, live_price):
+                        logger.info(f"Profit booked for order {order_id}.")
 
             time.sleep(self.check_interval)
 
