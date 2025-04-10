@@ -6,6 +6,7 @@ from order_manager import OrderManager
 from trade_manager import TradeManager
 import config
 import binance_ws  # Added for live price
+from signal_state import get_last_sl_closed_side, clear_last_sl_closed_side  # Added for SL state control
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,14 @@ def process_signal(signal_data, order_manager, trade_manager):
         new_side = "buy"
     else:
         new_side = None
+
+    # Check if SL was recently hit for this side
+    last_stopped = get_last_sl_closed_side()
+    if last_stopped == new_side:
+        logger.warning("SL hit on side '%s'. Waiting for opposite signal.", last_stopped)
+        return None
+    if last_stopped and new_side and last_stopped != new_side:
+        clear_last_sl_closed_side()
 
     if last_closed_side == new_side:
         logger.info("Last position on side '%s' was closed. Ignoring same-side signal.", new_side)
