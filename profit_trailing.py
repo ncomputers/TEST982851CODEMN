@@ -6,6 +6,7 @@ import config
 import binance_ws  # Live price updates via WS
 from trade_manager import TradeManager
 from notifier import send_email
+from signal_state import set_last_sl_closed_side  # <-- Added for SL state tracking
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +103,10 @@ class ProfitTrailing:
         conf = config.PROFIT_TRAILING_CONFIG
         fixed_sl = conf["fixed_stop_loss_pct"]
 
-        # Preserve existing rule if it was already dynamic or partial_booking
         existing_display = self.last_display.get(order_id)
         existing_rule = existing_display["rule"] if existing_display else "fixed_stop"
 
-        rule = "fixed_stop"  # default
+        rule = "fixed_stop"
         level_conf = None
         if profit_pct >= conf["start_trailing_profit_pct"]:
             level_conf = self.get_trailing_config(profit_pct)
@@ -125,7 +125,6 @@ class ProfitTrailing:
             book_fraction = level_conf.get("book_fraction", 1.0)
             new_trailing = entry * (1 + profit_pct * book_fraction) if size > 0 else entry * (1 - profit_pct * book_fraction)
         else:
-            # fallback in case level_conf was None
             new_trailing = entry * (1 - fixed_sl) if size > 0 else entry * (1 + fixed_sl)
 
         stored_trailing = self.position_trailing_stop.get(order_id)
@@ -161,10 +160,12 @@ class ProfitTrailing:
         if rule == "dynamic":
             if size > 0 and live_price < trailing_stop:
                 close_order = self.trade_manager.place_market_order("BTCUSD", "sell", size, params={"time_in_force": "ioc"})
+                set_last_sl_closed_side("buy")
                 logger.info("Trailing stop triggered for long order %s. Booking full profit. Close order: %s", order_id, close_order)
                 return True
             elif size < 0 and live_price > trailing_stop:
                 close_order = self.trade_manager.place_market_order("BTCUSD", "buy", abs(size), params={"time_in_force": "ioc"})
+                set_last_sl_closed_side("sell")
                 logger.info("Trailing stop triggered for short order %s. Booking full profit. Close order: %s", order_id, close_order)
                 return True
         elif rule == "partial_booking":
@@ -187,10 +188,12 @@ class ProfitTrailing:
         elif rule == "fixed_stop":
             if size > 0 and live_price < trailing_stop:
                 close_order = self.trade_manager.place_market_order("BTCUSD", "sell", size, params={"time_in_force": "ioc"})
+                set_last_sl_closed_side("buy")
                 logger.info("Fixed stop triggered for long order %s. Booking profit. Close order: %s", order_id, close_order)
                 return True
             elif size < 0 and live_price > trailing_stop:
                 close_order = self.trade_manager.place_market_order("BTCUSD", "buy", abs(size), params={"time_in_force": "ioc"})
+                set_last_sl_closed_side("sell")
                 logger.info("Fixed stop triggered for short order %s. Booking profit. Close order: %s", order_id, close_order)
                 return True
         return False
