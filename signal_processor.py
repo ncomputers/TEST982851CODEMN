@@ -9,6 +9,9 @@ import binance_ws  # Added for live price
 
 logger = logging.getLogger(__name__)
 
+last_executed_side = None
+last_closed_side = None
+
 def fetch_signal_from_redis(redis_client, key='signal'):
     try:
         data = redis_client.get(key)
@@ -69,6 +72,8 @@ def open_pending_order_exists(order_manager, symbol, side):
         return False
 
 def process_signal(signal_data, order_manager, trade_manager):
+    global last_executed_side, last_closed_side
+
     if not signal_data:
         return None
 
@@ -82,7 +87,6 @@ def process_signal(signal_data, order_manager, trade_manager):
     raw_supply = supply_zone.get("min")
     raw_demand = demand_zone.get("min")
 
-    # Use live price if signal price is missing
     if not raw_price:
         live_price = binance_ws.current_price
         if live_price is None:
@@ -91,7 +95,6 @@ def process_signal(signal_data, order_manager, trade_manager):
         raw_price = live_price
         logger.info("Using live price as fallback: %.2f", raw_price)
 
-    # Handle take profit with 50% profit lock and trailing
     if "take profit" in signal_text or "tp" in signal_text:
         logger.info("Take profit signal detected. Locking 50%% of profit and enabling trailing.")
         try:
@@ -109,7 +112,6 @@ def process_signal(signal_data, order_manager, trade_manager):
                     profit = (live_price - entry) if size > 0 else (entry - live_price)
                     lock_price = entry + profit * 0.5 if size > 0 else entry - profit * 0.5
 
-                    # Set trailing SL in profit_trailing
                     from profit_trailing import ProfitTrailing
                     pt = ProfitTrailing(check_interval=1)
                     pt.position_trailing_stop[pos.get('id')] = lock_price
@@ -123,7 +125,10 @@ def process_signal(signal_data, order_manager, trade_manager):
     elif "buy" in signal_text:
         new_side = "buy"
     else:
-        logger.warning("Signal text does not indicate 'buy', 'short', or 'take profit': %s", signal_text)
+        new_side = None
+
+    if last_closed_side == new_side:
+        logger.info("Last position on side '%s' was closed. Ignoring same-side signal.", new_side)
         return None
 
     cancel_conflicting_pending_orders_api(order_manager, "BTCUSD", new_side)
@@ -155,7 +160,6 @@ def process_signal(signal_data, order_manager, trade_manager):
     logger.info("Signal: %s | Entry: %.2f | SL: %.2f | TP: %.2f",
                 last_signal.get("text"), entry_price, sl_price, tp_price)
 
-    # Auto-close opposite position
     try:
         positions = order_manager.client.fetch_positions()
         for pos in positions:
@@ -166,10 +170,12 @@ def process_signal(signal_data, order_manager, trade_manager):
                 if new_side == "buy" and pos_amount < 0:
                     logger.info("Opposite short position exists. Closing it before buying.")
                     trade_manager.place_market_order("BTCUSD", "buy", abs(pos_amount), params={"time_in_force": "ioc"})
+                    last_closed_side = "sell"
                     time.sleep(2)
                 elif new_side == "sell" and pos_amount > 0:
                     logger.info("Opposite long position exists. Closing it before selling.")
                     trade_manager.place_market_order("BTCUSD", "sell", pos_amount, params={"time_in_force": "ioc"})
+                    last_closed_side = "buy"
                     time.sleep(2)
     except Exception as e:
         logger.error("Error checking/closing opposite position: %s", e)
@@ -181,6 +187,8 @@ def process_signal(signal_data, order_manager, trade_manager):
     try:
         limit_order = order_manager.place_order("BTCUSD", new_side, 1, entry_price, params={"time_in_force": "gtc"})
         logger.info("Limit order placed: %s", limit_order)
+        last_executed_side = new_side
+        last_closed_side = None
     except Exception as e:
         logger.error("Failed to place limit order: %s", e)
         return None
@@ -213,6 +221,7 @@ def signals_are_different(new_signal, old_signal):
     return new_text != old_text
 
 def start_signal_processing_loop():
+    global last_executed_side, last_closed_side
     order_manager = OrderManager()
     trade_manager = TradeManager()
     redis_client = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB)
