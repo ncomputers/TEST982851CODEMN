@@ -114,7 +114,12 @@ def process_signal(signal_data, order_manager, trade_manager):
 
                     from profit_trailing import ProfitTrailing
                     pt = ProfitTrailing(check_interval=1)
-                    pt.position_trailing_stop[pos.get('id')] = lock_price
+                    existing = pt.position_trailing_stop.get(pos.get('id'))
+                    if existing is None or (size > 0 and lock_price > existing) or (size < 0 and lock_price < existing):
+                        pt.position_trailing_stop[pos.get('id')] = lock_price
+                        logger.info("Updated trailing SL to tighter level: %.2f", lock_price)
+                    else:
+                        logger.info("Existing trailing SL is tighter. No update made.")
                     logger.info("Locked trailing SL at 50%% profit level: %.2f", lock_price)
         except Exception as e:
             logger.error("Error setting trailing SL from TP signal: %s", e)
